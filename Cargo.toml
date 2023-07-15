@@ -1,0 +1,18 @@
+[package]
+name = "tcp-channel-client"
+version = "0.1.0"
+authors = ["yi lu <luyikk@126.com>"]
+edition = "2018"
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/luyikk/tcpclient"
+documentation = "https://docs.rs/tcpclient"
+description = "Asynchronous tcpclient based on aqueue actor."
+
+
+[dependencies]
+log="0.4"
+tokio = { version = "1", features = ["rt", "net","io-util"] }
+anyhow="1.0"
+async-trait="0.1"
+async-channel = "1.9.0"
