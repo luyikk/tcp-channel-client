@@ -1,5 +1,6 @@
-use anyhow::{bail, Result};
+pub mod error;
 use async_channel::Sender;
+use error::{Error, Result};
 use log::*;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -19,7 +20,7 @@ impl TcpClient<TcpStream> {
     #[inline]
     pub async fn connect<
         T: ToSocketAddrs,
-        F: Future<Output = Result<bool>> + Send + 'static,
+        F: Future<Output = anyhow::Result<bool>> + Send + 'static,
         A: Send + 'static,
     >(
         addr: T,
@@ -32,7 +33,7 @@ impl TcpClient<TcpStream> {
     }
 }
 
-enum State {
+pub enum State {
     Disconnect,
     Send(Vec<u8>),
     SendFlush(Vec<u8>),
@@ -46,8 +47,8 @@ where
     #[inline]
     pub async fn connect_stream_type<
         H: ToSocketAddrs,
-        F: Future<Output = Result<bool>> + Send + 'static,
-        S: Future<Output = Result<T>> + Send + 'static,
+        F: Future<Output = anyhow::Result<bool>> + Send + 'static,
+        S: Future<Output = anyhow::Result<T>> + Send + 'static,
         A: Send + 'static,
     >(
         addr: H,
@@ -62,7 +63,7 @@ where
     }
 
     #[inline]
-    fn init<F: Future<Output = Result<bool>> + Send + 'static, A: Send + 'static>(
+    fn init<F: Future<Output = anyhow::Result<bool>> + Send + 'static, A: Send + 'static>(
         f: impl FnOnce(A, Arc<TcpClient<T>>, ReadHalf<T>) -> F + Send + 'static,
         token: A,
         stream: T,
@@ -80,13 +81,10 @@ where
         let read_client = client.clone();
         tokio::spawn(async move {
             let disconnect_client = read_client.clone();
-            let need_disconnect = match f(token, read_client, reader).await {
-                Ok(disconnect) => disconnect,
-                Err(err) => {
-                    error!("reader error:{}", err);
-                    true
-                }
-            };
+            let need_disconnect = f(token, read_client, reader).await.unwrap_or_else(|err| {
+                error!("reader error:{}", err);
+                true
+            });
 
             if need_disconnect {
                 if let Err(er) = disconnect_client.disconnect().await {
@@ -149,7 +147,7 @@ where
         if !self.disconnect.load(Ordering::Acquire) {
             Ok(self.sender.send(State::Send(buff)).await?)
         } else {
-            bail!("Send Error,Disconnect")
+            Err(Error::SendError("Disconnect".to_string()))
         }
     }
 
@@ -158,7 +156,7 @@ where
         if !self.disconnect.load(Ordering::Acquire) {
             Ok(self.sender.send(State::SendFlush(buff)).await?)
         } else {
-            bail!("Send Error,Disconnect")
+            Err(Error::SendError("Disconnect".to_string()))
         }
     }
 
@@ -167,7 +165,7 @@ where
         if !self.disconnect.load(Ordering::Acquire) {
             Ok(self.sender.send(State::Flush).await?)
         } else {
-            bail!("Send Error,Disconnect")
+            Err(Error::SendError("Disconnect".to_string()))
         }
     }
 }
