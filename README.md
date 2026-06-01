@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/tcp-channel-client)](https://crates.io/crates/tcp-channel-client)
 [![Documentation](https://docs.rs/tcp-channel-client/badge.svg)](https://docs.rs/tcp-channel-client)
-[![License](https://img.shields.io/crates/l/tcp-channel-client)](LICENSE)
+[![License](https://img.shields.io/crates/l/tcp-channel-client)](https://crates.io/crates/tcp-channel-client)
 
 An asynchronous TCP client built on the **actor pattern** using `async-channel` and `tokio`.
 
@@ -10,11 +10,9 @@ On connection, the library spawns two tokio tasks: a reader task that runs user-
 
 ## Installation
 
-Add to `Cargo.toml`:
-
 ```toml
 [dependencies]
-tcp-channel-client = "0.2"
+tcp-channel-client = "0.4"
 ```
 
 ## Usage
@@ -24,7 +22,7 @@ use tcp_channel_client::TcpClient;
 use tokio::io::AsyncReadExt;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> tcp_channel_client::Result<()> {
     // Connect to a TCP server
     let client = TcpClient::connect(
         "127.0.0.1:5555",
@@ -40,14 +38,14 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(true) // disconnect after loop ends
         },
-        (), // user token passed to the closure
+        (),
     )
     .await?;
 
-    // Send data from anywhere that holds an Arc clone
+    // Send data — safe to call from any task
     client.send(b"hello".to_vec()).await?;
 
-    // Graceful disconnect
+    // Graceful disconnect (idempotent)
     client.disconnect().await?;
 
     Ok(())
@@ -67,39 +65,51 @@ Connect and transform the raw `TcpStream` before entering the actor loop (e.g., 
 ### Methods on `TcpClient<T>`
 
 | Method | Description |
-|---|---|
-| `send(buf)` | Enqueue a write without flushing |
+| --- | --- |
+| `send(buf)` | Enqueue a write without flushing (Nagle-friendly) |
 | `send_all(buf)` | Enqueue a write followed by a flush |
-| `flush()` | Enqueue a flush |
-| `disconnect()` | Gracefully shut down the writer task and close the connection |
+| `flush()` | Enqueue a flush of the write buffer |
+| `try_send(buf)` | Non-blocking send; returns an error if the channel is full |
+| `disconnect()` | Gracefully shut down the writer task (idempotent) |
 
 All methods take `&self` and are safe to call concurrently from multiple tasks.
 
 ### The `input` closure
 
-```rust
-FnOnce(A, Arc<TcpClient<T>>, ReadHalf<T>) -> Future<Output = Result<bool>>
+```text
+FnOnce(A, Arc<TcpClient<T>>, ReadHalf<T>) -> Future<Output = anyhow::Result<bool>>
 ```
 
-- `A` — the user-provided token
-- `Arc<TcpClient<T>>` — a clone of the client handle, usable for sending from within the reader
-- `ReadHalf<T>` — the read half of the split stream
+- `A` — user-provided token
+- `Arc<TcpClient<T>>` — client handle for sending from within the reader
+- `ReadHalf<T>` — read half of the split stream
 
-Return `Ok(true)` to trigger disconnect after the closure completes, or `Ok(false)` to leave the connection open.
+Return `Ok(true)` to trigger disconnect after the closure completes, or `Ok(false)` to leave the connection open. Returning `Err` logs the error and disconnects.
+
+### Error types
+
+The crate defines its own `error::Error` enum and `error::Result<T>` alias:
+
+| Variant | Description |
+| --- | --- |
+| `SendError(String)` | Application-level send failure (disconnected / channel full) |
+| `IOError(std::io::Error)` | I/O errors from the underlying stream |
+| `Error(anyhow::Error)` | General errors from `anyhow` |
+| `AsyncChannelError(String)` | Internal channel delivery failure |
 
 ## How It Works
 
-```
-                  ┌─────────────────┐
- user code ──────►│  async_channel  │──────► writer task ──► write half
-   ▲              │   (bounded 4096) │                         │
-   │              └─────────────────┘                         │
-   │                                                         │
-   └──────────── reader task ◄── read half ◄──────────────────┘
+```text
+                 ┌─────────────────┐
+user code ──────►│  async_channel  │──────► writer task ──► write half
+  ▲              │   (bounded 4096) │                         │
+  │              └─────────────────┘                         │
+  │                                                         │
+  └──────────── reader task ◄── read half ◄──────────────────┘
 ```
 
-Write commands (`Send`, `SendFlush`, `Flush`, `Disconnect`) are sent through the channel and processed sequentially by the writer task. The reader task runs the user-supplied closure independently, reading from the stream.
+Write commands (`Send`, `SendFlush`, `Flush`, `Disconnect`) are sent through the channel and processed sequentially by the writer task. The writer merges consecutive `Send` messages into a single `write` syscall for better throughput. The reader task runs the user-supplied closure independently.
 
 ## License
 
-Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+Licensed under either of MIT or Apache-2.0 at your option.

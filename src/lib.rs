@@ -1,5 +1,7 @@
-use anyhow::{bail, Result};
+pub mod error;
+
 use async_channel::{Sender, TrySendError};
+use error::{Error, Result};
 use log::*;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -44,7 +46,7 @@ impl TcpClient<TcpStream> {
     #[inline]
     pub async fn connect<
         T: ToSocketAddrs,
-        F: Future<Output = Result<bool>> + Send + 'static,
+        F: Future<Output = anyhow::Result<bool>> + Send + 'static,
         A: Send + 'static,
     >(
         addr: T,
@@ -60,7 +62,7 @@ impl TcpClient<TcpStream> {
 /// Writer 任务从 channel 中消费的状态消息。
 ///
 /// 四种变体对应四种 TCP 写操作，按 FIFO 顺序在 writer 任务中执行。
-enum State {
+pub enum State {
     /// 关闭 writer 半端，退出 writer 任务。
     Disconnect,
     /// 写入数据，不刷新（依赖 TCP 栈缓冲 / Nagle 算法合并小包）。
@@ -90,8 +92,8 @@ where
     #[inline]
     pub async fn connect_stream_type<
         H: ToSocketAddrs,
-        F: Future<Output = Result<bool>> + Send + 'static,
-        S: Future<Output = Result<T>> + Send + 'static,
+        F: Future<Output = anyhow::Result<bool>> + Send + 'static,
+        S: Future<Output = anyhow::Result<T>> + Send + 'static,
         A: Send + 'static,
     >(
         addr: H,
@@ -123,7 +125,7 @@ where
     /// └──────────────┘
     /// ```
     #[inline]
-    fn init<F: Future<Output = Result<bool>> + Send + 'static, A: Send + 'static>(
+    fn init<F: Future<Output = anyhow::Result<bool>> + Send + 'static, A: Send + 'static>(
         f: impl FnOnce(A, Arc<TcpClient<T>>, ReadHalf<T>) -> F + Send + 'static,
         token: A,
         stream: T,
@@ -233,7 +235,7 @@ where
     #[inline]
     fn check_disconnected(&self) -> Result<()> {
         if self.disconnect.load(Ordering::Relaxed) {
-            bail!("already disconnected");
+            return Err(Error::SendError("Disconnect".to_string()));
         }
         Ok(())
     }
@@ -265,8 +267,8 @@ where
         self.check_disconnected()?;
         match self.sender.try_send(State::Send(buff)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => bail!("channel full"),
-            Err(TrySendError::Closed(_)) => bail!("channel closed"),
+            Err(TrySendError::Full(_)) => Err(Error::SendError("channel full".to_string())),
+            Err(TrySendError::Closed(_)) => Err(Error::SendError("channel closed".to_string())),
         }
     }
 
@@ -283,7 +285,7 @@ where
         match self.sender.try_send(State::Send(buff)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(state)) => Ok(self.sender.send(state).await?),
-            Err(TrySendError::Closed(_)) => bail!("channel closed"),
+            Err(TrySendError::Closed(_)) => Err(Error::SendError("channel closed".to_string())),
         }
     }
 
@@ -297,7 +299,7 @@ where
         match self.sender.try_send(State::SendFlush(buff)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(state)) => Ok(self.sender.send(state).await?),
-            Err(TrySendError::Closed(_)) => bail!("channel closed"),
+            Err(TrySendError::Closed(_)) => Err(Error::SendError("channel closed".to_string())),
         }
     }
 
@@ -310,7 +312,7 @@ where
         match self.sender.try_send(State::Flush) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Ok(self.sender.send(State::Flush).await?),
-            Err(TrySendError::Closed(_)) => bail!("channel closed"),
+            Err(TrySendError::Closed(_)) => Err(Error::SendError("channel closed".to_string())),
         }
     }
 }
