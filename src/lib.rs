@@ -167,7 +167,6 @@ where
         // ---- Writer 任务：顺序消费写命令 ----
         tokio::spawn(async move {
             // 复用写缓冲区，避免每次写入都重新分配内存
-            let mut buf: Vec<u8> = Vec::with_capacity(8192);
             loop {
                 // 阻塞等待下一个写命令
                 let state = match rx.recv().await {
@@ -182,31 +181,15 @@ where
                         return;
                     }
                     State::Send(data) => {
-                        buf.extend_from_slice(&data);
-                        // 尽量一次排空通道中所有连续的 Send 消息，合并成一次 write 系统调用
-                        while let Ok(State::Send(more)) = rx.try_recv() {
-                            buf.extend_from_slice(&more);
-                        }
-                        if let Err(e) = writer.write_all(&buf).await {
+                        if let Err(e) = writer.write_all(&data).await {
                             error!("write to {} err: {}", target, e);
                             return;
-                        }
-                        // 安全：数据已写入，仅重置长度，保留已分配的容量
-                        unsafe {
-                            buf.set_len(0);
                         }
                     }
                     State::SendFlush(data) => {
-                        buf.extend_from_slice(&data);
-                        while let Ok(State::Send(more)) = rx.try_recv() {
-                            buf.extend_from_slice(&more);
-                        }
-                        if let Err(e) = writer.write_all(&buf).await {
+                        if let Err(e) = writer.write_all(&data).await {
                             error!("write to {} err: {}", target, e);
                             return;
-                        }
-                        unsafe {
-                            buf.set_len(0);
                         }
                         // 写入后立即刷新，确保数据发送到对端
                         if let Err(e) = writer.flush().await {
