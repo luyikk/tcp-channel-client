@@ -52,17 +52,39 @@ async fn main() -> tcp_channel_client::Result<()> {
 }
 ```
 
+### Connection with timeout
+
+```rust
+use std::time::Duration;
+
+let client = TcpClient::connect_timeout(
+    "127.0.0.1:5555",
+    Duration::from_secs(5),
+    |_, _client, _reader| async move { Ok(false) },
+    (),
+)
+.await?;
+```
+
 ## API
 
 ### `TcpClient::connect(addr, input, token)`
 
 Connect to `addr` using a plain `TcpStream`. Returns `Arc<TcpClient<TcpStream>>`.
 
+### `TcpClient::connect_timeout(addr, timeout, input, token)`
+
+Like `connect`, but wraps the TCP handshake in `tokio::time::timeout`. Returns `Error::IOError(std::io::ErrorKind::TimedOut)` on timeout.
+
 ### `TcpClient::connect_stream_type(addr, stream_init, input, token)`
 
-Connect and transform the raw `TcpStream` before entering the actor loop (e.g., TLS upgrade via `tokio-native-tls`). Returns `Arc<TcpClient<T>>`.
+Connect and transform the raw `TcpStream` before entering the actor loop (e.g., TLS upgrade). Returns `Arc<TcpClient<Stream>>`.
 
-### Methods on `TcpClient<T>`
+### `TcpClient::connect_stream_type_timeout(addr, timeout, stream_init, input, token)`
+
+Like `connect_stream_type`, with a connection timeout.
+
+### Methods on `TcpClient<Stream>`
 
 | Method | Description |
 | --- | --- |
@@ -77,12 +99,12 @@ All methods take `&self` and are safe to call concurrently from multiple tasks.
 ### The `input` closure
 
 ```text
-FnOnce(A, Arc<TcpClient<T>>, ReadHalf<T>) -> Future<Output = anyhow::Result<bool>>
+FnOnce(Token, Arc<TcpClient<Stream>>, ReadHalf<Stream>) -> Future<Output = anyhow::Result<bool>>
 ```
 
-- `A` — user-provided token
-- `Arc<TcpClient<T>>` — client handle for sending from within the reader
-- `ReadHalf<T>` — read half of the split stream
+- `Token` — user-provided token
+- `Arc<TcpClient<Stream>>` — client handle for sending from within the reader
+- `ReadHalf<Stream>` — read half of the split stream
 
 Return `Ok(true)` to trigger disconnect after the closure completes, or `Ok(false)` to leave the connection open. Returning `Err` logs the error and disconnects.
 
@@ -92,10 +114,10 @@ The crate defines its own `error::Error` enum and `error::Result<T>` alias:
 
 | Variant | Description |
 | --- | --- |
-| `SendError(String)` | Application-level send failure (disconnected / channel full) |
+| `SendError(Cow<'static, str>)` | Application-level send failure (disconnected / channel full) |
 | `IOError(std::io::Error)` | I/O errors from the underlying stream |
-| `Error(anyhow::Error)` | General errors from `anyhow` |
-| `AsyncChannelError(String)` | Internal channel delivery failure |
+| `General(anyhow::Error)` | General errors from `anyhow` |
+| `AsyncChannelError(async_channel::SendError<State>)` | Internal channel delivery failure |
 
 ## How It Works
 
@@ -108,7 +130,7 @@ user code ──────►│  async_channel  │──────► writ
   └──────────── reader task ◄── read half ◄──────────────────┘
 ```
 
-Write commands (`Send`, `SendFlush`, `Flush`, `Disconnect`) are sent through the channel and processed sequentially by the writer task. The writer merges consecutive `Send` messages into a single `write` syscall for better throughput. The reader task runs the user-supplied closure independently.
+Write commands (`Send`, `SendFlush`, `Flush`, `Disconnect`) are sent through the channel and processed sequentially by the writer task. The reader task runs the user-supplied closure independently.
 
 ## License
 

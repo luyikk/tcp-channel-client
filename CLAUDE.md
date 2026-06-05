@@ -19,13 +19,11 @@ cargo test <test_name>
 
 # Check that code compiles without producing binaries
 cargo check
-```
-## Clippy
-After each code modification, you must run
-```bash
+
+# Format and lint
+cargo fmt
 cargo clippy
 ```
-
 
 ## Architecture
 
